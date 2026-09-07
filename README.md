@@ -1,311 +1,180 @@
-# Módulo EKS Node Groups
+# cloudops-ref-repo-aws-eks-nodegroups-terraform
 
-## Propósito
+Módulo de Referencia Terraform para la creación de **EKS Managed Node Groups** siguiendo las 26 reglas de gobernanza PC-IAC de Pragma y las mejores prácticas del AWS Well-Architected Framework.
 
-Este módulo crea y gestiona grupos de nodos (Node Groups) para Amazon Elastic Kubernetes Service (EKS). Los Node Groups proporcionan la capacidad de cómputo para ejecutar las aplicaciones en contenedores dentro del cluster EKS. El módulo permite configurar múltiples grupos de nodos con diferentes tipos de instancias, capacidades y configuraciones de escalado.
+---
 
-## Recursos creados
+## Descripción
 
-Este módulo crea los siguientes recursos de AWS:
+Este módulo tiene **responsabilidad única** (PC-IAC-023): crea y gestiona exclusivamente Managed Node Groups de EKS.
 
 | Recurso | Descripción |
-|---------|-------------|
-| `aws_eks_node_group` | Grupos de nodos gestionados por EKS |
+|---|---|
+| `aws_eks_node_group` | Node Group gestionado por AWS con Auto Scaling |
 
-## Inputs detallados
+**No crea:** IAM Roles, Security Groups, VPC, Subnets, EKS Cluster, Addons. Esos recursos son responsabilidad de los módulos correspondientes o del Root IaC.
 
-### Variables principales
+---
 
-| Nombre | Descripción | Tipo | Requerido | Default |
-|--------|-------------|------|----------|---------|
-| `client` | Nombre del cliente para el que se crea el recurso | `string` | Sí | - |
-| `project` | Nombre del proyecto o funcionalidad | `string` | Sí | - |
-| `environment` | Entorno de despliegue (dev, qa, pdn) | `string` | Sí | - |
-| `nodegroups` | Configuración de Node Groups para EKS | `map(object)` | Sí | - |
+## Rol en la Arquitectura Híbrida
 
-### Estructura de nodegroups
+Este módulo implementa la **Capa 1** de la arquitectura híbrida recomendada por Pragma:
 
-```hcl
-nodegroups = {
-  "nodegroup_key" = {
-    # Configuración básica (obligatoria)
-    cluster_name    = string
-    node_role_arn   = string
-    subnet_ids      = list(string)
-    
-    # Configuración de capacidad (opcional)
-    instance_types  = optional(list(string), ["t3.medium"])
-    capacity_type   = optional(string, "ON_DEMAND")  # ON_DEMAND o SPOT
-    disk_size       = optional(number, 20)
-    
-    # Configuración de escalado (opcional)
-    desired_size    = optional(number, 2)
-    min_size        = optional(number, 1)
-    max_size        = optional(number, 3)
-    
-    # Configuración de AMI (opcional)
-    ami_type        = optional(string, "AL2_x86_64")  # AL2_x86_64, AL2_ARM_64, etc.
-    release_version = optional(string, null)
-    
-    # Configuración de actualización (opcional)
-    update_config = optional(object({
-      max_unavailable            = optional(number, 1)
-      max_unavailable_percentage = optional(number, null)
-    }), null)
-    
-    # Configuración de etiquetas y taints (opcional)
-    labels         = optional(map(string), {})
-    taints         = optional(list(object({
-      key    = string
-      value  = string
-      effect = string
-    })), [])
-    
-    # Timeouts personalizados en minutos (opcional)
-    timeouts = optional(object({
-      create = optional(number, 30)
-      update = optional(number, 30)
-      delete = optional(number, 15)
-    }), null)
-    
-    # Etiquetas adicionales (opcional)
-    additional_tags = optional(map(string), {})
-  }
-}
+```
+Capa 1 — Managed Node Group (este módulo)
+  Nodos fijos On-Demand — sistema y plataforma
+  CoreDNS, metrics-server, Argo CD, cert-manager, etc.
+  Pods con affinity: karpenter.sh/nodepool DoesNotExist
+
+Capa 2 — Auto Mode Karpenter (NodePool custom)
+  Nodos dinámicos — workloads de aplicaciones
+  Escala a 0 cuando no hay carga
 ```
 
-#### Detalles de los parámetros
+El mecanismo de aislamiento es la affinity `karpenter.sh/nodepool: DoesNotExist` en los pods del sistema — los nodos del Node Group nunca tienen esa label, por lo que los pods del sistema siempre van al Node Group.
 
-##### Configuración básica
+---
 
-- `cluster_name`: Nombre del cluster EKS al que pertenecerá el Node Group
-- `node_role_arn`: ARN del rol IAM que asumirán los nodos
-- `subnet_ids`: Lista de IDs de subnets donde se desplegarán los nodos
-
-##### Configuración de capacidad
-
-- `instance_types`: Lista de tipos de instancias EC2 para los nodos
-- `capacity_type`: Tipo de capacidad ("ON_DEMAND" o "SPOT")
-- `disk_size`: Tamaño del disco raíz en GB
-
-##### Configuración de escalado
-
-- `desired_size`: Número deseado de nodos
-- `min_size`: Número mínimo de nodos
-- `max_size`: Número máximo de nodos
-
-##### Configuración de AMI
-
-- `ami_type`: Tipo de AMI para los nodos (AL2_x86_64, AL2_ARM_64, etc.)
-- `release_version`: Versión específica de la AMI
-
-##### Configuración de actualización
-
-- `max_unavailable`: Número máximo de nodos que pueden estar no disponibles durante una actualización
-- `max_unavailable_percentage`: Porcentaje máximo de nodos que pueden estar no disponibles durante una actualización
-
-##### Configuración de etiquetas y taints
-
-- `labels`: Mapa de etiquetas de Kubernetes para los nodos
-- `taints`: Lista de taints de Kubernetes para los nodos
-
-##### Timeouts personalizados
-
-- `create`: Timeout para la creación del Node Group (minutos)
-- `update`: Timeout para la actualización del Node Group (minutos)
-- `delete`: Timeout para la eliminación del Node Group (minutos)
-
-##### Etiquetas adicionales
-
-- `additional_tags`: Mapa de etiquetas adicionales para el Node Group
-
-## Outputs detallados
-
-| Nombre | Descripción | Ejemplo |
-|--------|-------------|---------|
-| `nodegroup_arns` | Mapa de ARNs de los Node Groups | `{"general" = "arn:aws:eks:us-east-1:123456789012:nodegroup/pragma-demo-dev-eks-main/pragma-demo-dev-ng-general/abcdef12-3456-7890-abcd-ef1234567890"}` |
-| `nodegroup_ids` | Mapa de IDs de los Node Groups | `{"general" = "pragma-demo-dev-ng-general"}` |
-| `nodegroup_statuses` | Mapa de estados de los Node Groups | `{"general" = "ACTIVE"}` |
-| `nodegroup_versions` | Mapa de versiones de Kubernetes de los Node Groups | `{"general" = "1.28"}` |
-
-## Ejemplos de uso
-
-### Ejemplo básico
+## Uso
 
 ```hcl
-module "eks_nodegroups" {
-  source = "../../modules/eks-nodegroups"
-  
+module "eks_nodegroup" {
+  source = "git::https://github.com/somospragma/cloudops-ref-repo-aws-eks-nodegroups-terraform.git?ref=feature/init-module-eks-nodegroup"
+
   providers = {
     aws.project = aws.principal
   }
-  
+
   client      = "pragma"
-  project     = "demo"
+  project     = "eks-platform"
   environment = "dev"
-  
+
   nodegroups = {
-    "general" = {
-      cluster_name    = "pragma-demo-dev-eks-main"
-      node_role_arn   = "arn:aws:iam::123456789012:role/EksNodeRole"
-      subnet_ids      = ["subnet-1", "subnet-2", "subnet-3"]
-    }
-  }
-}
-```
+    "system" = {
+      cluster_name  = module.eks_cluster.cluster_names["main"]
+      node_role_arn = "arn:aws:iam::123456789012:role/pragma-eks-platform-dev-ng-role"
+      subnet_ids    = ["subnet-aaa111", "subnet-bbb222"]
 
-### Ejemplo con múltiples Node Groups
+      kubernetes_version = "1.36"
+      ami_type           = "AL2023_x86_64_STANDARD"
+      instance_types     = ["t3.medium"]
+      capacity_type      = "ON_DEMAND"
 
-```hcl
-module "eks_nodegroups" {
-  source = "../../modules/eks-nodegroups"
-  
-  providers = {
-    aws.project = aws.principal
-  }
-  
-  client      = "pragma"
-  project     = "demo"
-  environment = "dev"
-  
-  nodegroups = {
-    "general" = {
-      cluster_name    = "pragma-demo-dev-eks-main"
-      node_role_arn   = "arn:aws:iam::123456789012:role/EksNodeRole"
-      subnet_ids      = ["subnet-1", "subnet-2", "subnet-3"]
-      
-      instance_types  = ["t3.large"]
-      capacity_type   = "ON_DEMAND"
-      disk_size       = 50
-      
-      desired_size    = 2
-      min_size        = 1
-      max_size        = 4
-      
-      labels = {
-        "role" = "general"
-        "workload-type" = "general"
-      }
-      
-      additional_tags = {
-        "kubernetes.io/cluster-name" = "pragma-demo-dev-eks-main"
-        "k8s.io/cluster-autoscaler/enabled" = "true"
-      }
-    },
-    "spot" = {
-      cluster_name    = "pragma-demo-dev-eks-main"
-      node_role_arn   = "arn:aws:iam::123456789012:role/EksNodeRole"
-      subnet_ids      = ["subnet-1", "subnet-2", "subnet-3"]
-      
-      instance_types  = ["t3.medium", "t3a.medium", "t2.medium"]
-      capacity_type   = "SPOT"
-      disk_size       = 30
-      
-      desired_size    = 3
-      min_size        = 1
-      max_size        = 10
-      
-      labels = {
-        "role" = "spot"
-        "workload-type" = "batch"
-      }
-      
-      taints = [
-        {
-          key    = "spot"
-          value  = "true"
-          effect = "NO_SCHEDULE"
-        }
-      ]
-      
-      additional_tags = {
-        "kubernetes.io/cluster-name" = "pragma-demo-dev-eks-main"
-        "k8s.io/cluster-autoscaler/enabled" = "true"
-      }
-    }
-  }
-}
-```
+      desired_size = 2
+      min_size     = 2
+      max_size     = 4
 
-### Ejemplo con configuración de actualización
+      # Reparación automática de nodos enfermos
+      node_repair_config = {
+        enabled = true
+      }
 
-```hcl
-module "eks_nodegroups" {
-  source = "../../modules/eks-nodegroups"
-  
-  providers = {
-    aws.project = aws.principal
-  }
-  
-  client      = "pragma"
-  project     = "demo"
-  environment = "dev"
-  
-  nodegroups = {
-    "general" = {
-      cluster_name    = "pragma-demo-dev-eks-main"
-      node_role_arn   = "arn:aws:iam::123456789012:role/EksNodeRole"
-      subnet_ids      = ["subnet-1", "subnet-2", "subnet-3"]
-      
-      instance_types  = ["t3.large"]
-      capacity_type   = "ON_DEMAND"
-      
-      desired_size    = 3
-      min_size        = 2
-      max_size        = 5
-      
-      # Configuración de actualización
+      # Update controlado — 1 nodo a la vez
       update_config = {
         max_unavailable = 1
+        update_strategy = "DEFAULT"
       }
-      
-      # Timeouts personalizados
-      timeouts = {
-        create = 45
-        update = 45
-        delete = 20
+
+      additional_tags = {
+        "role" = "system"
       }
     }
   }
 }
 ```
 
-## Consideraciones de rendimiento
+---
 
-- **Tipos de instancias**: La elección del tipo de instancia afecta directamente al rendimiento y costo del cluster. Considera el uso de instancias optimizadas para cómputo (c5, c6g) para cargas de trabajo intensivas en CPU, o instancias optimizadas para memoria (r5, r6g) para aplicaciones que requieren mucha memoria.
+## Inputs
 
-- **Capacidad Spot vs On-Demand**: Las instancias Spot pueden reducir significativamente los costos (hasta un 70-90%), pero pueden ser terminadas con poca antelación. Son ideales para cargas de trabajo tolerantes a fallos, como procesamiento por lotes o trabajos de CI/CD.
+| Variable | Tipo | Requerido | Default | Descripción |
+|---|---|---|---|---|
+| `client` | `string` | Sí | — | Nombre del cliente (max 10 chars) |
+| `project` | `string` | Sí | — | Nombre del proyecto (max 15 chars) |
+| `environment` | `string` | Sí | — | Entorno: `dev`, `qa`, `pdn`, `poc` |
+| `nodegroups` | `map(object)` | Sí | — | Mapa de configuraciones de Node Groups |
 
-- **Tamaño del disco**: Un tamaño de disco demasiado pequeño puede causar problemas si los nodos acumulan muchas imágenes de contenedores o logs. Se recomienda un mínimo de 20GB, pero considerar 50GB+ para entornos de producción.
+### nodegroups — Campos principales
 
-- **Escalado**: Configurar adecuadamente los valores de `min_size`, `max_size` y `desired_size` es crucial para la eficiencia de costos y rendimiento. Considera usar el Cluster Autoscaler para ajustar automáticamente el número de nodos según la demanda.
+| Campo | Tipo | Default | Descripción |
+|---|---|---|---|
+| `cluster_name` | `string` | — | Nombre del cluster EKS |
+| `node_role_arn` | `string` | — | ARN del IAM Role de los nodos |
+| `subnet_ids` | `list(string)` | — | Mínimo 2 subnets en AZs distintas |
+| `kubernetes_version` | `string` | `null` (hereda cluster) | Versión K8s del Node Group |
+| `release_version` | `string` | `null` (última AMI) | Versión de la AMI |
+| `force_update_version` | `bool` | `false` | Fuerza update si PDB bloquea |
+| `instance_types` | `list(string)` | `["t3.medium"]` | Tipos de instancia |
+| `capacity_type` | `string` | `"ON_DEMAND"` | `ON_DEMAND` o `SPOT` |
+| `disk_size` | `number` | `20` | GB de disco (ignorado con launch_template) |
+| `ami_type` | `string` | `"AL2023_x86_64_STANDARD"` | Tipo de AMI |
+| `desired_size` | `number` | `2` | Nodos deseados (ignore_changes habilitado) |
+| `min_size` | `number` | `1` | Mínimo de nodos |
+| `max_size` | `number` | `4` | Máximo de nodos |
+| `update_config` | `object` | `null` | Config de actualización |
+| `node_repair_config.enabled` | `bool` | `true` | Reparación automática de nodos |
+| `launch_template` | `object` | `null` | Launch Template custom |
+| `labels` | `map(string)` | `{}` | Labels K8s en nodos |
+| `taints` | `list(object)` | `[]` | Taints K8s en nodos |
+| `additional_tags` | `map(string)` | `{}` | Tags adicionales |
 
-- **Distribución de zonas**: Distribuir los nodos en múltiples zonas de disponibilidad mejora la resiliencia, pero puede aumentar los costos de transferencia de datos entre zonas.
+---
 
-- **Taints y labels**: El uso estratégico de taints y labels permite dirigir cargas de trabajo específicas a nodos específicos, optimizando el uso de recursos.
+## Outputs
 
-- **Actualizaciones**: La configuración `max_unavailable` afecta la velocidad y el impacto de las actualizaciones. Un valor más alto acelera las actualizaciones pero puede reducir la capacidad disponible durante el proceso.
+| Output | Descripción |
+|---|---|
+| `nodegroup_names` | Mapa de nombres de los Node Groups |
+| `nodegroup_arns` | Mapa de ARNs de los Node Groups |
+| `nodegroup_ids` | Mapa de IDs (cluster:nodegroup) |
+| `nodegroup_statuses` | Mapa de estados (ACTIVE, CREATING, etc.) |
+| `autoscaling_group_names` | Lista de nombres de los ASGs asociados |
+| `nodegroup_resources` | Mapa con ASGs y remote access SG por Node Group |
 
-- **AMI optimizadas**: Las AMI optimizadas para EKS incluyen configuraciones y optimizaciones específicas para Kubernetes, mejorando el rendimiento y la seguridad.
+---
 
-## Limitaciones conocidas
+## Versiones Requeridas
 
-- **Cambios inmutables**: Algunos parámetros como `capacity_type`, `subnet_ids` y `disk_size` no pueden cambiarse después de la creación del Node Group. Requieren recrear el Node Group.
+| Componente | Versión Mínima |
+|---|---|
+| Terraform | `>= 1.5.0` |
+| AWS Provider | `>= 5.75.0` |
 
-- **Actualización de versión**: La actualización de la versión de Kubernetes en un Node Group existente no es posible. Se debe crear un nuevo Node Group con la versión deseada y migrar las cargas de trabajo.
+---
 
-- **Tipos de instancias**: Una vez creado el Node Group, no se puede modificar la lista de tipos de instancias.
+## Nomenclatura
 
-- **Capacidad mínima**: Durante las actualizaciones, el número de nodos puede caer temporalmente por debajo del `min_size` configurado.
+```
+{client}-{project}-{environment}-ng-{key}
 
-- **Taints**: Los taints aplicados a través de este módulo se aplican a nivel de Node Group. No es posible aplicar taints a nodos individuales.
+Ejemplo: pragma-eks-platform-dev-ng-system
+```
 
-- **Escalado automático**: Este módulo configura los parámetros de escalado, pero no implementa el Cluster Autoscaler. Se requiere una instalación separada del Cluster Autoscaler para el escalado automático basado en la demanda.
+---
 
-- **Tiempo de creación**: La creación de un Node Group puede tardar entre 3-10 minutos, dependiendo del número de nodos y el tipo de instancia.
+## Cumplimiento PC-IAC
 
-- **Límites de servicio**: EKS tiene límites en el número de Node Groups por cluster (30 por defecto) y nodos por cluster (450 por defecto).
+| Regla | ID | Implementación |
+|---|---|---|
+| Estructura de módulo | PC-IAC-001 | 10 archivos raíz + directorio sample/ |
+| Variables tipadas y validadas | PC-IAC-002 | `map(object)` con `optional()` y validaciones |
+| Nomenclatura estándar | PC-IAC-003 | `{client}-{project}-{env}-ng-{key}` en `locals.tf` |
+| Etiquetas | PC-IAC-004 | `merge(Name, additional_tags)` en recursos |
+| Provider alias | PC-IAC-005 | `provider = aws.project` |
+| Versiones fijadas | PC-IAC-006 | `versions.tf` con `configuration_aliases` |
+| Outputs granulares | PC-IAC-007 | Solo IDs/ARNs/nombres |
+| Hardenizado seguridad | PC-IAC-020 | `node_repair_config`, `lifecycle ignore_changes` |
+| Responsabilidad única | PC-IAC-023 | Solo Node Groups, sin IAM/SG/VPC |
 
-- **Rol IAM**: El rol IAM debe existir antes de crear el Node Group y debe tener las políticas necesarias adjuntas (`AmazonEKSWorkerNodePolicy`, `AmazonEC2ContainerRegistryReadOnly`, `AmazonEKS_CNI_Policy`).
+---
 
-- **Compatibilidad de AMI**: No todas las AMI son compatibles con todas las versiones de Kubernetes. Es importante verificar la compatibilidad antes de especificar una `release_version` personalizada.
+## Decisiones de Diseño
+
+### lifecycle ignore_changes en desired_size
+El `desired_size` tiene `ignore_changes` para que el Cluster Autoscaler o ajustes manuales puedan cambiar el número de nodos sin que el próximo `terraform apply` lo revierta. El control del escalado queda en manos del autoscaler, no de Terraform.
+
+### node_repair_config
+La reparación automática de nodos requiere que el addon `eks-node-monitoring-agent` esté instalado en el cluster. Sin ese addon, la feature no opera aunque esté habilitada en el Node Group.
+
+### AL2023 como AMI por defecto
+`AL2023_x86_64_STANDARD` es el sucesor de AL2 y es la AMI recomendada por AWS para nuevos Node Groups. Incluye mejor soporte de seguridad y es la que AWS continuará manteniendo.
